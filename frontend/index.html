@@ -212,4 +212,30 @@
 
 </body>
 
+<script>// Otomatis deteksi: jika buka di localhost pakai port 5000, jika dideploy pakai URL Railway kamu
+    const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? 'http://localhost:5000'
+        : `${window.location.protocol}//${window.location.host}`; // Menggunakan satu domain jika dideploy satu package di Railway
+
+    // Contoh fungsi mengambil data produk dari database untuk ditampilkan ke UI
+    async function ambilKatalogProduk() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/produk`);
+            const result = await response.json();
+
+            if (result.success) {
+                console.log('Data produk berhasil dimuat:', result.data);
+                // Logika manipulasi DOM HTML kamu di sini
+                // contoh: mendesain tabel/list produk untuk kasir
+            }
+        } catch (error) {
+            console.error('Frontend gagal mengambil data dari API backend:', error);
+        }
+    }
+
+    // Jalankan saat halaman web selesai dimuat
+    document.addEventListener('DOMContentLoaded', () => {
+        ambilKatalogProduk();
+    });</script>
+
 </html>
