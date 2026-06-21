@@ -1,0 +1,107 @@
+##
+## aturan_harga_umkm_v1.vrule
+## Rule Pack VDICL — Kalkulasi Harga UMKM
+## Kelompok 3 | Sistem Manajemen Pesanan Berbasis VFlow
+##
+## Format: VDICL Rule Pack (sesuai vrule-authoring-guide)
+## Hit Policy: RULE_ORDER (semua rule yang cocok dieksekusi berurutan;
+## rule fallback ditulis dengan kondisi kebalikan agar tidak overlap)
+##
+
+version: 1
+rule_pack_id: aturan_harga_umkm_v1
+rule_pack_name: Aturan Kalkulasi Harga UMKM
+eval_mode: bytecode
+hit_policy: RULE_ORDER
+
+rules:
+
+  ## RULE 1: HitungDiskonMember
+  ## Jika tipe pelanggan adalah "member" DAN subtotal >= 100000,
+  ## maka diskon = 10% dari subtotal.
+  - id: r_hitung_diskon_member
+    description: >
+      Memberikan diskon 10% kepada pelanggan bertipe "member"
+      apabila nilai subtotal mencapai minimal Rp 100.000.
+    when: tipe_pelanggan == "member" AND subtotal >= 100000
+    then:
+      - kind: EVAL_SET_FIELD
+        path: diskon
+        expr: subtotal * 0.10
+
+  ## RULE 2: Fallback diskon = 0 untuk pelanggan non-member
+  ## atau member dengan subtotal di bawah threshold.
+  - id: r_hitung_diskon_default
+    description: >
+      Menetapkan diskon = 0 apabila kondisi diskon member tidak terpenuhi
+      (pelanggan reguler, atau member dengan subtotal < 100000).
+    when: tipe_pelanggan != "member" OR subtotal < 100000
+    then:
+      - kind: EVAL_SET_FIELD
+        path: diskon
+        expr: "0"
+
+  ## RULE 3: HitungAdministrasi
+  ## Jika metode_pembayaran == "e-wallet", biaya_admin = 2000.
+  - id: r_hitung_administrasi_ewallet
+    description: >
+      Mengenakan biaya administrasi Rp 2.000 untuk transaksi
+      menggunakan metode pembayaran "e-wallet".
+    when: metode_pembayaran == "e-wallet"
+    then:
+      - kind: EVAL_SET_FIELD
+        path: biaya_admin
+        expr: "2000"
+
+  ## RULE 4: Fallback biaya_admin = 0 untuk metode selain e-wallet
+  - id: r_hitung_administrasi_default
+    description: >
+      Menetapkan biaya administrasi = 0 untuk metode pembayaran
+      selain "e-wallet" (tunai dan transfer tidak dikenakan biaya admin).
+    when: metode_pembayaran != "e-wallet"
+    then:
+      - kind: EVAL_SET_FIELD
+        path: biaya_admin
+        expr: "0"
+
+  ## RULE 5: HitungOngkir
+  ## Jika metode_pengambilan == "delivery", biaya_pengiriman = 15000.
+  - id: r_hitung_ongkir_delivery
+    description: >
+      Mengenakan biaya pengiriman Rp 15.000 apabila pelanggan memilih
+      metode pengambilan "delivery".
+    when: metode_pengambilan == "delivery"
+    then:
+      - kind: EVAL_SET_FIELD
+        path: biaya_pengiriman
+        expr: "15000"
+
+  ## RULE 6: Fallback biaya_pengiriman = 0 untuk ambil sendiri
+  - id: r_hitung_ongkir_default
+    description: >
+      Menetapkan biaya pengiriman = 0 apabila pelanggan memilih
+      metode pengambilan "ambil-sendiri".
+    when: metode_pengambilan != "delivery"
+    then:
+      - kind: EVAL_SET_FIELD
+        path: biaya_pengiriman
+        expr: "0"
+
+  ## RULE 7: Safety Fallback
+  ## Memastikan semua field output tidak bernilai null
+  ## setelah seluruh rule di atas diproses (RULE_ORDER guarantee).
+  - id: r_safety_fallback_null_guard
+    description: >
+      Perlindungan akhir — memastikan setiap output field
+      tidak bernilai null dengan COALESCE ke 0.
+    when: true
+    then:
+      - kind: EVAL_SET_FIELD
+        path: diskon
+        expr: COALESCE(diskon, 0)
+      - kind: EVAL_SET_FIELD
+        path: biaya_admin
+        expr: COALESCE(biaya_admin, 0)
+      - kind: EVAL_SET_FIELD
+        path: biaya_pengiriman
+        expr: COALESCE(biaya_pengiriman, 0)

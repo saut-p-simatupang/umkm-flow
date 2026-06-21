@@ -1,0 +1,110 @@
+##
+## workflow-2-validasi-stok.yaml
+## VWFD Dialect v3.0 — Workflow: Validasi Stok Produk
+## Kelompok 3 | Sistem Manajemen Pesanan Berbasis VFlow
+##
+## Fungsi  : Memeriksa kecukupan stok produk sebelum ditambahkan ke pesanan.
+## Input   : { pesanan_id: UUID, produk_id: UUID, jumlah: integer }
+## Output  : { tersedia: boolean, message: string }
+## Trigger : webhook (HTTP POST dari Native Backend)
+## Mode    : runtime_mode: fastpath
+##
+
+dialect: vflow
+version: "3.0"
+
+metadata:
+  name: w2-validasi-stok
+  description: "Workflow untuk memvalidasi ketersediaan stok produk"
+  author: "Kelompok 3"
+
+spec:
+  runtime_mode: fastpath
+
+  activities:
+
+    ## ── Step 1: Trigger (Webhook dari Native Backend) ──────────────────────
+    - id: start_trigger
+      activity_type: Trigger
+      trigger_config:
+        trigger_type: webhook
+        runtime_mode: fastpath
+        end_activity: end_response
+        webhook_config:
+          path: /trigger/w2-validasi-stok
+          method: POST
+      output_variable: trigger_payload
+
+    ## ── Step 2: Connector — SELECT stok produk dari PostgreSQL ─────────────
+    - id: query_stok_produk
+      activity_type: Connector
+      connector_config:
+        connector_ref: "vastar.db.postgres"
+        operation: query
+        query: >
+          SELECT
+            id,
+            nama_produk,
+            stok,
+            harga_satuan
+          FROM produk
+          WHERE id = :produk_id
+          LIMIT 1;
+      input_mappings:
+        - target: produk_id
+          source: { language: v-cel, source: "trigger_payload.body.produk_id" }
+      output_variable: stok_result
+
+    ## ── Step 3: ExclusiveGateway — Cek ketersediaan stok ──────────────────
+    - id: gateway_cek_stok
+      activity_type: ExclusiveGateway
+
+    ## ── Step 4a: Transform — Stok Tersedia ─────────────────────────────────
+    - id: transform_stok_tersedia
+      activity_type: Transform
+      input_mappings:
+        - target: tersedia
+          source: { language: literal, source: "true" }
+        - target: stok_tersisa
+          source: { language: v-cel, source: "stok_result.rows[0].stok" }
+        - target: nama_produk
+          source: { language: v-cel, source: "stok_result.rows[0].nama_produk" }
+        - target: harga_satuan
+          source: { language: v-cel, source: "stok_result.rows[0].harga_satuan" }
+        - target: message
+          source: { language: literal, source: "Stok produk tersedia dan mencukupi untuk jumlah yang diminta." }
+      output_variable: response_payload
+
+    ## ── Step 4b: Transform — Stok Habis ─────────────────────────────────
+    - id: transform_stok_habis
+      activity_type: Transform
+      input_mappings:
+        - target: tersedia
+          source: { language: literal, source: "false" }
+        - target: stok_tersisa
+          source: { language: v-cel, source: "stok_result.rows[0].stok" }
+        - target: nama_produk
+          source: { language: v-cel, source: "stok_result.rows[0].nama_produk" }
+        - target: harga_satuan
+          source: { language: v-cel, source: "stok_result.rows[0].harga_satuan" }
+        - target: message
+          source: { language: literal, source: "Stok produk tidak mencukupi untuk memenuhi jumlah yang diminta." }
+      output_variable: response_payload
+
+    ## ── Step 5: EndTrigger — Kembalikan response ke client ─────────────────
+    - id: end_response
+      activity_type: EndTrigger
+      end_trigger_config:
+        trigger_ref: start_trigger
+        final_response:
+          language: v-cel
+          source: "response_payload"
+
+  ## ── Definisi Alur Antar Step (Flows) ────────────────────────────────────
+  flows:
+    - { id: f1, from: { node: start_trigger           }, to: { node: query_stok_produk       } }
+    - { id: f2, from: { node: query_stok_produk       }, to: { node: gateway_cek_stok        } }
+    - { id: f3, from: { node: gateway_cek_stok        }, to: { node: transform_stok_tersedia }, condition: "stok_result.rows[0].stok >= trigger_payload.body.jumlah", priority: 1 }
+    - { id: f4, from: { node: gateway_cek_stok        }, to: { node: transform_stok_habis    }, priority: 0 }
+    - { id: f5, from: { node: transform_stok_tersedia }, to: { node: end_response            } }
+    - { id: f6, from: { node: transform_stok_habis    }, to: { node: end_response            } }

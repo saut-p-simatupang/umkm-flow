@@ -1,0 +1,96 @@
+##
+## workflow-3-kalkulasi-tagihan.yaml
+## VWFD Dialect v3.0 — Workflow: Kalkulasi Tagihan Pesanan
+## Kelompok 3 | Sistem Manajemen Pesanan Berbasis VFlow
+##
+## Fungsi  : Menghitung total tagihan pesanan dengan memanggil rule pack
+##            aturan_harga_umkm_v1.
+## Input   : { subtotal, total_item, tipe_pelanggan,
+##              metode_pembayaran, metode_pengambilan }
+## Output  : { subtotal, diskon, biaya_admin, biaya_pengiriman, total_tagihan }
+## Trigger : webhook (HTTP POST dari Native Backend)
+## Mode    : runtime_mode: fastpath
+##
+
+dialect: vflow
+version: "3.0"
+
+metadata:
+  name: w3-kalkulasi-tagihan
+  description: "Workflow untuk menghitung tagihan pesanan menggunakan rule pack UMKM"
+  author: "Kelompok 3"
+
+spec:
+  runtime_mode: fastpath
+
+  activities:
+
+    ## ── Step 1: Trigger (Webhook dari Native Backend) ──────────────────────
+    - id: start_trigger
+      activity_type: Trigger
+      trigger_config:
+        trigger_type: webhook
+        runtime_mode: fastpath
+        end_activity: end_response
+        webhook_config:
+          path: /trigger/w3-kalkulasi-tagihan
+          method: POST
+      output_variable: trigger_payload
+
+    ## ── Step 2: VRule — Evaluasi rule pack aturan harga UMKM ──────────────
+    - id: evaluasi_aturan_harga
+      activity_type: VRule
+      rule_config:
+        rule_set_id: "aturan_harga_umkm_v1"
+        eval_mode: bytecode
+      input_mappings:
+        - target: subtotal
+          source: { language: v-cel, source: "trigger_payload.body.subtotal" }
+        - target: total_item
+          source: { language: v-cel, source: "trigger_payload.body.total_item" }
+        - target: tipe_pelanggan
+          source: { language: v-cel, source: "trigger_payload.body.tipe_pelanggan" }
+        - target: metode_pembayaran
+          source: { language: v-cel, source: "trigger_payload.body.metode_pembayaran" }
+        - target: metode_pengambilan
+          source: { language: v-cel, source: "trigger_payload.body.metode_pengambilan" }
+      output_variable: aturan_result
+
+    ## ── Step 3: Transform — Hitung total_tagihan ────────────────────────────
+    - id: hitung_total_tagihan
+      activity_type: Transform
+      input_mappings:
+        - target: subtotal
+          source: { language: v-cel, source: "trigger_payload.body.subtotal" }
+        - target: total_item
+          source: { language: v-cel, source: "trigger_payload.body.total_item" }
+        - target: tipe_pelanggan
+          source: { language: v-cel, source: "trigger_payload.body.tipe_pelanggan" }
+        - target: metode_pembayaran
+          source: { language: v-cel, source: "trigger_payload.body.metode_pembayaran" }
+        - target: metode_pengambilan
+          source: { language: v-cel, source: "trigger_payload.body.metode_pengambilan" }
+        - target: diskon
+          source: { language: v-cel, source: "aturan_result.outputs.diskon" }
+        - target: biaya_admin
+          source: { language: v-cel, source: "aturan_result.outputs.biaya_admin" }
+        - target: biaya_pengiriman
+          source: { language: v-cel, source: "aturan_result.outputs.biaya_pengiriman" }
+        - target: total_tagihan
+          source: { language: v-cel, source: "trigger_payload.body.subtotal - aturan_result.outputs.diskon + aturan_result.outputs.biaya_admin + aturan_result.outputs.biaya_pengiriman" }
+      output_variable: response_payload
+
+    ## ── Step 4: EndTrigger — Kembalikan response ke client ─────────────────
+    - id: end_response
+      activity_type: EndTrigger
+      end_trigger_config:
+        trigger_ref: start_trigger
+        final_response:
+          language: v-cel
+          source: "response_payload"
+
+  ## ── Definisi Alur Antar Step (Flows) ────────────────────────────────────
+  flows:
+    - { id: f1, from: { node: start_trigger          }, to: { node: evaluasi_aturan_harga } }
+    - { id: f2, from: { node: evaluasi_aturan_harga  }, to: { node: hitung_total_tagihan  } }
+    - { id: f3, from: { node: hitung_total_tagihan   }, to: { node: end_response          } }

@@ -1,0 +1,101 @@
+##
+## workflow-1-buka-keranjang.yaml
+## VWFD Dialect v3.0 — Workflow: Buka Keranjang Pesanan
+## Kelompok 3 | Sistem Manajemen Pesanan Berbasis VFlow
+##
+## Fungsi  : Membuat record pesanan baru di tabel `pesanan`
+##            dengan status awal 'draft'.
+## Input   : { pelanggan_id: UUID, kasir_id: UUID }
+## Output  : { status: "success", pesanan_id: UUID, message: string }
+## Trigger : webhook (HTTP POST dari Native Backend)
+## Mode    : runtime_mode: standard
+##
+
+dialect: vflow
+version: "3.0"
+
+metadata:
+  name: w1-buka-keranjang
+  description: "Workflow untuk membuka keranjang pesanan baru dengan status draft"
+  author: "Kelompok 3"
+
+spec:
+  runtime_mode: standard
+
+  activities:
+
+    ## ── Step 1: Trigger (Webhook dari Native Backend) ──────────────────────
+    - id: start_trigger
+      activity_type: Trigger
+      trigger_config:
+        trigger_type: webhook
+        runtime_mode: standard
+        end_activity: end_response
+        webhook_config:
+          path: trigger/w1-buka-keranjang
+          method: POST
+      output_variable: trigger_payload
+
+    ## ── Step 2: Connector — INSERT pesanan baru ke PostgreSQL ──────────────
+    - id: insert_pesanan_db
+      activity_type: Connector
+      connector_config:
+        connector_ref: "vastar.db.postgres"
+        operation: query
+        query: >
+          INSERT INTO pesanan (
+            pelanggan_id,
+            kasir_id,
+            status,
+            subtotal,
+            total_tagihan,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            :pelanggan_id,
+            :kasir_id,
+            'draft',
+            0,
+            0,
+            NOW(),
+            NOW()
+          )
+          RETURNING id, pelanggan_id, kasir_id, status, created_at;
+      input_mappings:
+        - target: pelanggan_id
+          source: { language: v-cel, source: "trigger_payload.body.pelanggan_id" }
+        - target: kasir_id
+          source: { language: v-cel, source: "trigger_payload.body.kasir_id" }
+      output_variable: db_result
+
+    ## ── Step 3: Transform — Format response sukses ─────────────────────────
+    - id: transform_response
+      activity_type: Transform
+      input_mappings:
+        - target: status
+          source: { language: literal, source: "success" }
+        - target: pesanan_id
+          source: { language: v-cel, source: "db_result.rows[0].id" }
+        - target: kasir_id
+          source: { language: v-cel, source: "db_result.rows[0].kasir_id" }
+        - target: created_at
+          source: { language: v-cel, source: "db_result.rows[0].created_at" }
+        - target: message
+          source: { language: literal, source: "Keranjang pesanan berhasil dibuka dengan status draft." }
+      output_variable: response_payload
+
+    ## ── Step 4: EndTrigger — Kembalikan response ke client ─────────────────
+    - id: end_response
+      activity_type: EndTrigger
+      end_trigger_config:
+        trigger_ref: start_trigger
+        final_response:
+          language: v-cel
+          source: "response_payload"
+
+  ## ── Definisi Alur Antar Step (Flows) ────────────────────────────────────
+  flows:
+    - { id: f1, from: { node: start_trigger      }, to: { node: insert_pesanan_db  } }
+    - { id: f2, from: { node: insert_pesanan_db  }, to: { node: transform_response } }
+    - { id: f3, from: { node: transform_response }, to: { node: end_response       } }

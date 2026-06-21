@@ -1,0 +1,96 @@
+##
+## workflow-6-audit-log.yaml
+## VWFD Dialect v3.0 — Workflow: Audit Log (Asinkron)
+## Kelompok 3 | Sistem Manajemen Pesanan Berbasis VFlow
+##
+## Fungsi  : INSERT rekam jejak transaksi ke tabel audit_log secara
+##            fire-and-forget (dipanggil via webhook async).
+## Input   : { aktivitas_tipe, pesanan_id, payload_log }
+## Trigger : webhook (HTTP POST)
+## Mode    : runtime_mode: fastpath
+##
+
+dialect: vflow
+version: "3.0"
+
+metadata:
+  name: w6-audit-log
+  description: "Workflow untuk mencatat audit log transaksi ke database secara asinkron"
+  author: "Kelompok 3"
+
+spec:
+  runtime_mode: fastpath
+
+  activities:
+
+    ## ── Step 1: Trigger ──────────────────────────────────────────────────
+    - id: event_trigger
+      activity_type: Trigger
+      trigger_config:
+        trigger_type: webhook
+        runtime_mode: fastpath
+        end_activity: end_response
+        webhook_config:
+          path: /trigger/w6-audit-log
+          method: POST
+      output_variable: trigger_payload
+
+    ## ── Step 2: Connector — INSERT audit log ke PostgreSQL ─────────────────
+    - id: tulis_audit_log
+      activity_type: Connector
+      connector_config:
+        connector_ref: "vastar.db.postgres"
+        operation: query
+        query: >
+          INSERT INTO audit_log (
+            aktivitas_tipe,
+            pesanan_id,
+            payload_log,
+            created_at
+          )
+          VALUES (
+            :aktivitas_tipe,
+            :pesanan_id,
+            :payload_log::jsonb,
+            NOW()
+          )
+          RETURNING id, aktivitas_tipe, pesanan_id, created_at;
+      input_mappings:
+        - target: aktivitas_tipe
+          source: { language: v-cel, source: "trigger_payload.body.aktivitas_tipe" }
+        - target: pesanan_id
+          source: { language: v-cel, source: "trigger_payload.body.pesanan_id" }
+        - target: payload_log
+          source: { language: v-cel, source: "trigger_payload.body.payload_log" }
+      output_variable: log_result
+
+    ## ── Step 3: Transform — Format response konfirmasi log ─────────────────
+    - id: transform_konfirmasi_log
+      activity_type: Transform
+      input_mappings:
+        - target: recorded
+          source: { language: literal, source: "true" }
+        - target: log_id
+          source: { language: v-cel, source: "log_result.rows[0].id" }
+        - target: aktivitas
+          source: { language: v-cel, source: "log_result.rows[0].aktivitas_tipe" }
+        - target: pesanan_id
+          source: { language: v-cel, source: "log_result.rows[0].pesanan_id" }
+        - target: logged_at
+          source: { language: v-cel, source: "log_result.rows[0].created_at" }
+      output_variable: response_payload
+
+    ## ── Step 4: EndTrigger ────────────────────────────────────────────────
+    - id: end_response
+      activity_type: EndTrigger
+      end_trigger_config:
+        trigger_ref: event_trigger
+        final_response:
+          language: v-cel
+          source: "response_payload"
+
+  ## ── Flows ────────────────────────────────────────────────────────────────
+  flows:
+    - { id: f1, from: { node: event_trigger            }, to: { node: tulis_audit_log          } }
+    - { id: f2, from: { node: tulis_audit_log          }, to: { node: transform_konfirmasi_log  } }
+    - { id: f3, from: { node: transform_konfirmasi_log }, to: { node: end_response              } }

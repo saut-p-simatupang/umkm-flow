@@ -1,0 +1,117 @@
+##
+## workflow-4-konfirmasi-pembayaran.yaml
+## VWFD Dialect v3.0 — Workflow: Konfirmasi Pembayaran
+## Kelompok 3 | Sistem Manajemen Pesanan Berbasis VFlow
+##
+## Fungsi  : Memverifikasi nominal pembayaran dan mengupdate status pesanan
+##            menjadi 'lunas'.
+## Input   : { pesanan_id: UUID, total_tagihan: number, nominal_dibayar: number }
+## Output  : { status: "success"|"failed", kembalian: number, message: string }
+## Trigger : webhook (HTTP POST dari Native Backend)
+## Mode    : runtime_mode: standard
+##
+
+dialect: vflow
+version: "3.0"
+
+metadata:
+  name: w4-konfirmasi-pembayaran
+  description: "Workflow untuk memverifikasi pembayaran dan update status pesanan ke lunas"
+  author: "Kelompok 3"
+
+spec:
+  runtime_mode: standard
+
+  activities:
+
+    ## ── Step 1: Trigger (Webhook dari Native Backend) ──────────────────────
+    - id: start_trigger
+      activity_type: Trigger
+      trigger_config:
+        trigger_type: webhook
+        runtime_mode: standard
+        end_activity: end_response
+        webhook_config:
+          path: /trigger/w4-konfirmasi-pembayaran
+          method: POST
+      output_variable: trigger_payload
+
+    ## ── Step 2: ExclusiveGateway — Cek kecukupan pembayaran ────────────────
+    - id: gateway_cek_pembayaran
+      activity_type: ExclusiveGateway
+
+    ## ── Step 3a: Connector — UPDATE status=lunas jika pembayaran cukup ─────
+    - id: update_status_lunas
+      activity_type: Connector
+      connector_config:
+        connector_ref: "vastar.db.postgres"
+        operation: query
+        query: >
+          UPDATE pesanan
+          SET
+            status     = 'lunas',
+            updated_at = NOW()
+          WHERE id = :pesanan_id
+          RETURNING id, status, updated_at;
+      input_mappings:
+        - target: pesanan_id
+          source: { language: v-cel, source: "trigger_payload.body.pesanan_id" }
+      output_variable: update_result
+
+    ## ── Step 4a: Transform — Format response pembayaran sukses ─────────────
+    - id: transform_pembayaran_sukses
+      activity_type: Transform
+      input_mappings:
+        - target: status
+          source: { language: literal, source: "success" }
+        - target: pesanan_id
+          source: { language: v-cel, source: "update_result.rows[0].id" }
+        - target: status_pesanan
+          source: { language: v-cel, source: "update_result.rows[0].status" }
+        - target: total_tagihan
+          source: { language: v-cel, source: "trigger_payload.body.total_tagihan" }
+        - target: nominal_dibayar
+          source: { language: v-cel, source: "trigger_payload.body.nominal_dibayar" }
+        - target: kembalian
+          source: { language: v-cel, source: "trigger_payload.body.nominal_dibayar - trigger_payload.body.total_tagihan" }
+        - target: message
+          source: { language: literal, source: "Pembayaran berhasil dikonfirmasi. Pesanan berstatus lunas." }
+      output_variable: response_payload
+
+    ## ── Step 3b: Transform — Format response pembayaran gagal ──────────────
+    - id: transform_gagal_bayar
+      activity_type: Transform
+      input_mappings:
+        - target: status
+          source: { language: literal, source: "failed" }
+        - target: pesanan_id
+          source: { language: v-cel, source: "trigger_payload.body.pesanan_id" }
+        - target: total_tagihan
+          source: { language: v-cel, source: "trigger_payload.body.total_tagihan" }
+        - target: nominal_dibayar
+          source: { language: v-cel, source: "trigger_payload.body.nominal_dibayar" }
+        - target: kekurangan
+          source: { language: v-cel, source: "trigger_payload.body.total_tagihan - trigger_payload.body.nominal_dibayar" }
+        - target: kembalian
+          source: { language: literal, source: "0" }
+        - target: message
+          source: { language: literal, source: "Pembayaran gagal. Nominal yang dibayarkan kurang dari total tagihan." }
+      output_variable: response_payload
+
+    ## ── Step 5: EndTrigger — Kembalikan response ke client ─────────────────
+    - id: end_response
+      activity_type: EndTrigger
+      end_trigger_config:
+        trigger_ref: start_trigger
+        final_response:
+          language: v-cel
+          source: "response_payload"
+
+  ## ── Definisi Alur Antar Step (Flows) ────────────────────────────────────
+  flows:
+    - { id: f1, from: { node: start_trigger               }, to: { node: gateway_cek_pembayaran      } }
+    - { id: f2, from: { node: gateway_cek_pembayaran      }, to: { node: update_status_lunas         }, condition: "trigger_payload.body.nominal_dibayar >= trigger_payload.body.total_tagihan", priority: 1 }
+    - { id: f3, from: { node: gateway_cek_pembayaran      }, to: { node: transform_gagal_bayar       }, priority: 0 }
+    - { id: f4, from: { node: update_status_lunas         }, to: { node: transform_pembayaran_sukses } }
+    - { id: f5, from: { node: transform_pembayaran_sukses }, to: { node: end_response                } }
+    - { id: f6, from: { node: transform_gagal_bayar       }, to: { node: end_response                } }

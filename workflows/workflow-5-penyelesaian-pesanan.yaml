@@ -1,0 +1,111 @@
+##
+## workflow-5-penyelesaian-pesanan.yaml
+## VWFD Dialect v3.0 — Workflow: Penyelesaian Pesanan
+## Kelompok 3 | Sistem Manajemen Pesanan Berbasis VFlow
+##
+## Fungsi  : Menandai pesanan selesai (status='selesai') dan mengurangi
+##            stok produk terkait di tabel produk secara atomik.
+## Input   : { pesanan_id: UUID }
+## Output  : { status: "completed", message: string }
+## Trigger : webhook (HTTP POST dari Native Backend)
+## Mode    : runtime_mode: standard
+##
+
+dialect: vflow
+version: "3.0"
+
+metadata:
+  name: w5-penyelesaian-pesanan
+  description: "Workflow untuk menyelesaikan pesanan: update status ke selesai dan kurangi stok"
+  author: "Kelompok 3"
+
+spec:
+  runtime_mode: standard
+
+  activities:
+
+    ## ── Step 1: Trigger (Webhook dari Native Backend) ──────────────────────
+    - id: start_trigger
+      activity_type: Trigger
+      trigger_config:
+        trigger_type: webhook
+        runtime_mode: standard
+        end_activity: end_response
+        webhook_config:
+          path: /trigger/w5-penyelesaian-pesanan
+          method: POST
+      output_variable: trigger_payload
+
+    ## ── Step 2: Connector — UPDATE status pesanan menjadi 'selesai' ────────
+    - id: update_status_selesai
+      activity_type: Connector
+      connector_config:
+        connector_ref: "vastar.db.postgres"
+        operation: query
+        query: >
+          UPDATE pesanan
+          SET
+            status     = 'selesai',
+            updated_at = NOW()
+          WHERE id = :pesanan_id
+            AND status = 'lunas'
+          RETURNING id, status, updated_at;
+      input_mappings:
+        - target: pesanan_id
+          source: { language: v-cel, source: "trigger_payload.body.pesanan_id" }
+      output_variable: update_result
+
+    ## ── Step 3: Connector — UPDATE kurangi stok produk di tabel produk ─────
+    - id: update_kurangi_stok
+      activity_type: Connector
+      connector_config:
+        connector_ref: "vastar.db.postgres"
+        operation: query
+        query: >
+          UPDATE produk
+          SET
+            stok       = stok - ip.jumlah,
+            updated_at = NOW()
+          FROM (
+            SELECT produk_id, jumlah
+            FROM item_pesanan
+            WHERE pesanan_id = :pesanan_id
+          ) AS ip
+          WHERE produk.id = ip.produk_id
+          RETURNING produk.id AS produk_id, produk.stok AS stok_setelah_dikurangi;
+      input_mappings:
+        - target: pesanan_id
+          source: { language: v-cel, source: "trigger_payload.body.pesanan_id" }
+      output_variable: stok_result
+
+    ## ── Step 4: Transform — Format response sukses ─────────────────────────
+    - id: transform_pesanan_selesai
+      activity_type: Transform
+      input_mappings:
+        - target: status
+          source: { language: literal, source: "completed" }
+        - target: pesanan_id
+          source: { language: v-cel, source: "update_result.rows[0].id" }
+        - target: status_pesanan
+          source: { language: v-cel, source: "update_result.rows[0].status" }
+        - target: updated_at
+          source: { language: v-cel, source: "update_result.rows[0].updated_at" }
+        - target: message
+          source: { language: literal, source: "Pesanan berhasil diselesaikan dan stok produk telah diperbarui." }
+      output_variable: response_payload
+
+    ## ── Step 5: EndTrigger — Kembalikan response ke client ─────────────────
+    - id: end_response
+      activity_type: EndTrigger
+      end_trigger_config:
+        trigger_ref: start_trigger
+        final_response:
+          language: v-cel
+          source: "response_payload"
+
+  ## ── Definisi Alur Antar Step (Flows) ────────────────────────────────────
+  flows:
+    - { id: f1, from: { node: start_trigger              }, to: { node: update_status_selesai   } }
+    - { id: f2, from: { node: update_status_selesai      }, to: { node: update_kurangi_stok     } }
+    - { id: f3, from: { node: update_kurangi_stok        }, to: { node: transform_pesanan_selesai } }
+    - { id: f4, from: { node: transform_pesanan_selesai  }, to: { node: end_response            } }
