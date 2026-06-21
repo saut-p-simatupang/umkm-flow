@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Sistem Pesanan UMKM</title>
+</head>
+
+<body>
+
+    <h1>Sistem Pesanan UMKM</h1>
+
+    <hr>
+
+    <h3>1. Buka Keranjang</h3>
+
+    <button onclick="bukaKeranjang()">
+        Buka Keranjang
+    </button>
+
+    <p id="pesanan"></p>
+
+    <hr>
+
+    <h3>2. Hitung Tagihan</h3>
+
+    <label>Subtotal</label>
+    <br>
+    <input type="number" id="subtotal">
+    <br><br>
+
+    <label>Total Item</label>
+    <br>
+    <input type="number" id="item">
+    <br><br>
+
+    <button onclick="hitungTagihan()">
+        Hitung Tagihan
+    </button>
+
+    <div id="hasilTagihan"></div>
+
+    <hr>
+
+    <h3>3. Pembayaran</h3>
+
+    <label>Nominal Bayar</label>
+    <br>
+    <input type="number" id="bayar">
+    <br><br>
+
+    <button onclick="bayarPesanan()">
+        Bayar
+    </button>
+
+    <p id="hasilBayar"></p>
+
+    <hr>
+
+    <h3>4. Selesaikan Pesanan</h3>
+
+    <button onclick="selesaikanPesanan()">
+        Selesaikan
+    </button>
+
+    <p id="status"></p>
+
+    <script>
+
+        const BASE_URL = "http://localhost:8080";
+
+        let pesananId = "";
+        let totalTagihan = 0;
+
+        async function bukaKeranjang() {
+
+            try {
+
+                const response = await fetch(
+                    BASE_URL + "/trigger/w1-buka-keranjang",
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            pelanggan_id: "PLG001",
+                            kasir_id: "KSR001"
+                        })
+                    }
+                );
+
+                const data = await response.json();
+
+                pesananId = data.pesanan_id || "";
+
+                document.getElementById("pesanan").innerHTML =
+                    "Pesanan ID : " + pesananId;
+
+            } catch (err) {
+                console.log(err);
+                alert("Gagal membuka keranjang");
+            }
+        }
+
+        async function hitungTagihan() {
+
+            try {
+
+                const subtotal =
+                    Number(document.getElementById("subtotal").value);
+
+                const item =
+                    Number(document.getElementById("item").value);
+
+                const response = await fetch(
+                    BASE_URL + "/trigger/w3-kalkulasi-tagihan",
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            subtotal: subtotal,
+                            total_item: item,
+                            tipe_pelanggan: "member",
+                            metode_pembayaran: "cash",
+                            metode_pengambilan: "pickup"
+                        })
+                    }
+                );
+
+                const data = await response.json();
+
+                totalTagihan = data.total_tagihan;
+
+                document.getElementById("hasilTagihan").innerHTML =
+                    `
+        <p>Diskon : ${data.diskon}</p>
+        <p>Biaya Admin : ${data.biaya_admin}</p>
+        <p>Biaya Kirim : ${data.biaya_pengiriman}</p>
+        <h3>Total : ${data.total_tagihan}</h3>
+        `;
+
+            } catch (err) {
+                console.log(err);
+                alert("Gagal hitung tagihan");
+            }
+        }
+
+        async function bayarPesanan() {
+
+            try {
+
+                const nominal =
+                    Number(document.getElementById("bayar").value);
+
+                const response = await fetch(
+                    BASE_URL + "/trigger/w4-konfirmasi-pembayaran",
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            pesanan_id: pesananId,
+                            total_tagihan: totalTagihan,
+                            nominal_dibayar: nominal
+                        })
+                    }
+                );
+
+                const data = await response.json();
+
+                document.getElementById("hasilBayar").innerHTML =
+                    "Kembalian : " + data.kembalian;
+
+            } catch (err) {
+                console.log(err);
+                alert("Pembayaran gagal");
+            }
+        }
+
+        async function selesaikanPesanan() {
+
+            try {
+
+                const response = await fetch(
+                    BASE_URL + "/trigger/w5-penyelesaian-pesanan",
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            pesanan_id: pesananId
+                        })
+                    }
+                );
+
+                const data = await response.json();
+
+                document.getElementById("status").innerHTML =
+                    JSON.stringify(data);
+
+            } catch (err) {
+                console.log(err);
+                alert("Gagal menyelesaikan pesanan");
+            }
+        }
+
+    </script>
+
+</body>
+
+</html>
